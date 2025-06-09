@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HR AI Assistant</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .message-bubble {
+            animation: slideIn 0.3s ease-out;
+        }
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .typing-indicator {
+            animation: pulse 1.5s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .upload-area {
+            border: 2px dashed #cbd5e1;
+            transition: all 0.3s ease;
+        }
+        
+        .upload-area.dragover {
+            border-color: #3b82f6;
+            background-color: #eff6ff;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 font-sans">
+    <!-- Login Modal -->
+    <div id="loginModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg p-8 max-w-md w-full mx-4">
+            <h2 class="text-2xl font-bold text-center mb-6">HR AI Assistant Login</h2>
+            <form id="loginForm">
+                <div class="mb-4">
+                    <label class="block text-gray-700 text-sm font-bold mb-2">Email</label>
+                    <input type="email" id="loginEmail" required 
+                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                           placeholder="your.email@company.com">
+                </div>
+                <div class="mb-6">
+                    <label class="block text-gray-700 text-sm font-bold mb-2">Password</label>
+                    <input type="password" id="loginPassword" required
+                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                           placeholder="Password">
+                </div>
+                <button type="submit" 
+                        class="w-full bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">
+                    Login
+                </button>
+            </form>
+            <div class="mt-4 text-sm text-gray-600">
+                <p><strong>Demo Credentials:</strong></p>
+                <p>Email: john.doe@company.com</p>
+                <p>Password: password123</p>
+            </div>
+            <div id="loginError" class="mt-4 text-red-500 text-sm hidden"></div>
+        </div>
+    </div>
+
+    <!-- Main Application -->
+    <div id="mainApp" class="hidden min-h-screen">
+        <!-- Header -->
+        <header class="bg-white shadow-sm border-b">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex justify-between items-center py-4">
+                    <div class="flex items-center">
+                        <h1 class="text-2xl font-bold text-gray-900">HR AI Assistant</h1>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <span id="userWelcome" class="text-gray-700"></span>
+                        <button id="logoutBtn" class="bg-red-500 hover:bg-red-700 text-white px-4 py-2 rounded text-sm">
+                            Logout
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+                
+                <!-- Sidebar -->
+                <div class="lg:col-span-1">
+                    <!-- Quick Actions -->
+                    <div class="bg-white rounded-lg shadow p-6 mb-6">
+                        <h3 class="text-lg font-semibold mb-4">Quick Actions</h3>
+                        <div class="space-y-2">
+                            <button onclick="sendQuickMessage('What is the leave policy?')" 
+                                    class="w-full text-left px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded">
+                                📝 Leave Policy
+                            </button>
+                            <button onclick="sendQuickMessage('Tell me about employee benefits')" 
+                                    class="w-full text-left px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded">
+                                💰 Benefits Info
+                            </button>
+                            <button onclick="sendQuickMessage('What is the code of conduct?')" 
+                                    class="w-full text-left px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded">
+                                📋 Code of Conduct
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Document Upload -->
+                    <div class="bg-white rounded-lg shadow p-6 mb-6">
+                        <h3 class="text-lg font-semibold mb-4">Upload Document</h3>
+                        <div id="uploadArea" class="upload-area p-4 rounded-lg text-center cursor-pointer">
+                            <p class="text-gray-500 text-sm">Drop files here or click to upload</p>
+                            <input type="file" id="fileInput" class="hidden" accept=".pdf,.docx,.txt">
+                        </div>
+                        <div class="mt-3">
+                            <input type="text" id="docTitle" placeholder="Document title" 
+                                   class="w-full px-3 py-2 text-sm border border-gray-300 rounded mb-2">
+                            <select id="docType" class="w-full px-3 py-2 text-sm border border-gray-300 rounded">
+                                <option value="policy">Policy</option>
+                                <option value="procedure">Procedure</option>
+                                <option value="handbook">Handbook</option>
+                                <option value="benefits">Benefits</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Analytics -->
+                    <div class="bg-white rounded-lg shadow p-6">
+                        <h3 class="text-lg font-semibold mb-4">Your Usage</h3>
+                        <div id="analyticsContent" class="space-y-2 text-sm">
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">Total Queries:</span>
+                                <span id="totalQueries" class="font-semibold">0</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">Avg Confidence:</span>
+                                <span id="avgConfidence" class="font-semibold">0%</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chat Area -->
+                <div class="lg:col-span-3">
+                    <div class="bg-white rounded-lg shadow h-[600px] flex flex-col">
+                        
+                        <!-- Chat Header -->
+                        <div class="border-b px-6 py-4 flex justify-between items-center">
+                            <h2 class="text-xl font-semibold">Chat with HR Assistant</h2>
+                            <button id="clearChatBtn" class="text-gray-500 hover:text-gray-700 text-sm">
+                                Clear Chat
+                            </button>
+                        </div>
+
+                        <!-- Chat Messages -->
+                        <div id="chatMessages" class="flex-1 overflow-y-auto p-6 space-y-4">
+                            <div class="message-bubble flex items-start space-x-3">
+                                <div class="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm font-bold">
+                                    AI
+                                </div>
+                                <div class="bg-gray-100 rounded-lg px-4 py-2 max-w-xs lg:max-w-md">
+                                    <p class="text-sm">Hello! I'm your HR AI Assistant. I can help you with policies, benefits, leave questions, and more. How can I assist you today?</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Typing Indicator -->
+                        <div id="typingIndicator" class="hidden px-6 pb-2">
+                            <div class="flex items-center space-x-2">
+                                <div class="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm font-bold">
+                                    AI
+                                </div>
+                                <div class="typing-indicator bg-gray-100 rounded-lg px-4 py-2">
+                                    <p class="text-sm text-gray-500">Thinking...</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Chat Input -->
+                        <div class="border-t px-6 py-4">
+                            <div class="flex space-x-2">
+                                <input type="text" id="messageInput" 
+                                       placeholder="Ask me anything about HR policies, benefits, or procedures..."
+                                       class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <button id="sendBtn" 
+                                        class="bg-blue-500 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium">
+                                    Send
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript -->
+    <script>
+        // Global variables
+        let authToken = null;
+        let currentUser = null;
+        let currentSessionId = null;
+        
+        // API base URL
+        const API_BASE = '/api';
+        
+        // Initialize app
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeApp();
+        });
+        
+        function initializeApp() {
+            // Check if user is already logged in
+            authToken = localStorage.getItem('authToken');
+            if (authToken) {
+                validateToken();
+            }
+            
+            // Set up event listeners
+            setupEventListeners();
+        }
+        
+        function setupEventListeners() {
+            // Login form
+            document.getElementById('loginForm').addEventListener('submit', handleLogin);
+            
+            // Logout button
+            document.getElementById('logoutBtn').addEventListener('click', handleLogout);
+            
+            // Chat input
+            const messageInput = document.getElementById('messageInput');
+            messageInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    sendMessage();
+                }
+            });
+            
+            // Send button
+            document.getElementById('sendBtn').addEventListener('click', sendMessage);
+            
+            // Clear chat button
+            document.getElementById('clearChatBtn').addEventListener('click', clearChat);
+            
+            // File upload
+            setupFileUpload();
+        }
+        
+        async function handleLogin(e) {
+            e.preventDefault();
+            
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            const errorDiv = document.getElementById('loginError');
+            
+            try {
+                const response = await fetch(`${API_BASE}/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    authToken = data.access_token;
+                    currentUser = data.employee;
+                    
+                    localStorage.setItem('authToken', authToken);
+                    showMainApp();
+                    loadAnalytics();
+                } else {
+                    const error = await response.json();
+                    errorDiv.textContent = error.detail || 'Login failed';
+                    errorDiv.classList.remove('hidden');
+                }
+            } catch (error) {
+                errorDiv.textContent = 'Network error. Please try again.';
+                errorDiv.classList.remove('hidden');
+            }
+        }
+        
+        function handleLogout() {
+            authToken = null;
+            currentUser = null;
+            currentSessionId = null;
+            localStorage.removeItem('authToken');
+            showLoginModal();
+            clearChat();
+        }
+        
+        async function validateToken() {
+            try {
+                const response = await fetch(`${API_BASE}/profile`, {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+                
+                if (response.ok) {
+                    currentUser = await response.json();
+                    showMainApp();
+                    loadAnalytics();
+                } else {
+                    handleLogout();
+                }
+            } catch (error) {
+                handleLogout();
+            }
+        }
+        
+        function showMainApp() {
+            document.getElementById('loginModal').classList.add('hidden');
+            document.getElementById('mainApp').classList.remove('hidden');
+            document.getElementById('userWelcome').textContent = `Welcome, ${currentUser.name}`;
+        }
+        
+        function showLoginModal() {
+            document.getElementById('loginModal').classList.remove('hidden');
+            document.getElementById('mainApp').classList.add('hidden');
+            document.getElementById('loginError').classList.add('hidden');
+        }
+        
+        async function sendMessage(message = null) {
+            const input = document.getElementById('messageInput');
+            const messageText = message || input.value.trim();
+            
+            if (!messageText) return;
+            
+            // Clear input
+            input.value = '';
+            
+            // Add user message to chat
+            addMessageToChat(messageText, 'user');
+            
+            // Show typing indicator
+            showTypingIndicator();
+            
+            try {
+                const response = await fetch(`${API_BASE}/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${authToken}`
+                    },
+                    body: JSON.stringify({
+                        message: messageText,
+                        session_id: currentSessionId
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    currentSessionId = data.session_id;
+                    
+                    // Hide typing indicator
+                    hideTypingIndicator();
+                    
+                    // Add AI response to chat
+                    addMessageToChat(data.response, 'assistant', data.confidence, data.message_id);
+                    
+                    // Update analytics
+                    loadAnalytics();
+                } else {
+                    hideTypingIndicator();
+                    addMessageToChat('Sorry, I encountered an error. Please try again.', 'assistant');
+                }
+            } catch (error) {
+                hideTypingIndicator();
+                addMessageToChat('Network error. Please check your connection and try again.', 'assistant');
+            }
+        }
+        
+        function sendQuickMessage(message) {
+            sendMessage(message);
+        }
+        
+        function addMessageToChat(text, type, confidence = null, messageId = null) {
+            const chatMessages = document.getElementById('chatMessages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message-bubble flex items-start space-x-3';
+            
+            if (type === 'user') {
+                messageDiv.innerHTML = `
+                    <div class="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center text-white text-sm font-bold">
+                        ${currentUser.name.charAt(0)}
+                    </div>
+                    <div class="bg-blue-100 rounded-lg px-4 py-2 max-w-xs lg:max-w-md ml-auto">
+                        <p class="text-sm">${text}</p>
+                    </div>
+                `;
+                messageDiv.classList.add('flex-row-reverse');
+            } else {
+                const confidenceIndicator = confidence ? `
+                    <div class="mt-2 text-xs text-gray-500">
+                        Confidence: ${Math.round(confidence * 100)}%
+                        ${messageId ? `
+                            <div class="mt-1 flex space-x-1">
+                                <button onclick="submitFeedback(${messageId}, 1)" class="text-green-500 hover:text-green-700">👍</button>
+                                <button onclick="submitFeedback(${messageId}, 0)" class="text-red-500 hover:text-red-700">👎</button>
+                            </div>
+                        ` : ''}
+                    </div>
+                ` : '';
+                
+                messageDiv.innerHTML = `
+                    <div class="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm font-bold">
+                        AI
+                    </div>
+                    <div class="bg-gray-100 rounded-lg px-4 py-2 max-w-xs lg:max-w-md">
+                        <p class="text-sm">${text}</p>
+                        ${confidenceIndicator}
+                    </div>
+                `;
+            }
+            
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+        
+        function showTypingIndicator() {
+            document.getElementById('typingIndicator').classList.remove('hidden');
+            const chatMessages = document.getElementById('chatMessages');
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+        
+        function hideTypingIndicator() {
+            document.getElementById('typingIndicator').classList.add('hidden');
+        }
+        
+        function clearChat() {
+            const chatMessages = document.getElementById('chatMessages');
+            chatMessages.innerHTML = `
+                <div class="message-bubble flex items-start space-x-3">
+                    <div class="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm font-bold">
+                        AI
+                    </div>
+                    <div class="bg-gray-100 rounded-lg px-4 py-2 max-w-xs lg:max-w-md">
+                        <p class="text-sm">Hello! I'm your HR AI Assistant. I can help you with policies, benefits, leave questions, and more. How can I assist you today?</p>
+                    </div>
+                </div>
+            `;
+            currentSessionId = null;
+        }
+        
+        async function submitFeedback(messageId, rating) {
+            try {
+                await fetch(`${API_BASE}/feedback`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${authToken}`
+                    },
+                    body: JSON.stringify({
+                        message_id: messageId,
+                        rating: rating
+                    })
+                });
+            } catch (error) {
+                console.error('Error submitting feedback:', error);
+            }
+        }
+        
+        async function loadAnalytics() {
+            try {
+                const response = await fetch(`${API_BASE}/analytics/usage`, {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('totalQueries').textContent = data.total_queries;
+                    document.getElementById('avgConfidence').textContent = Math.round(data.average_confidence * 100) + '%';
+                }
+            } catch (error) {
+                console.error('Error loading analytics:', error);
+            }
+        }
+        
+        function setupFileUpload() {
+            const uploadArea = document.getElementById('uploadArea');
+            const fileInput = document.getElementById('fileInput');
+            
+            // Click to upload
+            uploadArea.addEventListener('click', () => fileInput.click());
+            
+            // Drag and drop
+            uploadArea.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                uploadArea.classList.add('dragover');
+            });
+            
+            uploadArea.addEventListener('dragleave', () => {
+                uploadArea.classList.remove('dragover');
+            });
+            
+            uploadArea.addEventListener('drop', (e) => {
+                e.preventDefault();
+                uploadArea.classList.remove('dragover');
+                
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    handleFileUpload(files[0]);
+                }
+            });
+            
+            fileInput.addEventListener('change', (e) => {
+                if (e.target.files.length > 0) {
+                    handleFileUpload(e.target.files[0]);
+                }
+            });
+        }
+        
+        async function handleFileUpload(file) {
+            const title = document.getElementById('docTitle').value || file.name;
+            const docType = document.getElementById('docType').value;
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('title', title);
+            formData.append('document_type', docType);
+            
+            try {
+                const response = await fetch(`${API_BASE}/documents/upload`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    },
+                    body: formData
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    alert(`Document uploaded successfully! Created ${data.chunks_created} searchable chunks.`);
+                    document.getElementById('docTitle').value = '';
+                } else {
+                    const error = await response.json();
+                    alert(`Upload failed: ${error.detail}`);
+                }
+            } catch (error) {
+                alert('Upload failed. Please try again.');
+            }
+        }
+    </script>
+</body>
+</html>
