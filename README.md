@@ -259,6 +259,17 @@ Currently working on these improvements:
 
 --> To perform better query processing and intent classification.
 
+--> Leave approval endpoint in the chat assistant
+
 Screenshots:
+![image](https://github.com/user-attachments/assets/86407ca8-acb6-4f3a-947a-10d1ae0c4dac)
+
+![image](https://github.com/user-attachments/assets/79d2a58b-7f16-4287-94fa-7d8d34f63ceb)
+
+![image](https://github.com/user-attachments/assets/4e9b5b76-9cac-489c-8c34-9ee7981d7511)
+
+![image](https://github.com/user-attachments/assets/c167cba1-f918-4c23-a191-a356c014f61e)
+
+
 
 
