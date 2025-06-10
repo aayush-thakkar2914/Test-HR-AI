@@ -253,8 +253,12 @@ gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker
 
 Currently working on these improvements:
 
---> To get formatted response from the AI Agent.
+--> To get a formatted response from the AI Agent.
 
---> To add more KRAs in the assistant
+--> To add more KRAs for the assistant
 
 --> To perform better query processing and intent classification.
+
+Screenshots:
+
+
