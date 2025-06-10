@@ -93,6 +93,133 @@ def get_current_employee(authorization: str = Header(None), db: Session = Depend
     
     return employee
 
+@app.get("/api/debug/database")
+async def debug_database(
+    current_employee: Employee = Depends(get_current_employee),
+    db: Session = Depends(get_db)
+):
+    """Debug endpoint to check database state"""
+    if current_employee.user_role != UserRole.HR_ADMIN:
+        raise HTTPException(status_code=403, detail="HR Admin only")
+    
+    employees = db.query(Employee).all()
+    applications = db.query(LeaveApplication).all()
+    
+    return {
+        "employees": [
+            {
+                "id": emp.id,
+                "name": emp.name,
+                "role": emp.user_role.value,
+                "manager_id": emp.manager_id
+            }
+            for emp in employees
+        ],
+        "applications": [
+            {
+                "id": app.id,
+                "number": app.application_number,
+                "employee_id": app.employee_id,
+                "manager_id": app.manager_id,
+                "status": app.status.value
+            }
+            for app in applications
+        ]
+    }
+
+# Add this to your main.py file
+
+@app.get("/api/debug/manager/{manager_id}")
+async def debug_manager_data(
+    manager_id: int,
+    current_employee: Employee = Depends(get_current_employee),
+    db: Session = Depends(get_db)
+):
+    """Debug endpoint to check manager data"""
+    if current_employee.user_role not in [UserRole.HR_ADMIN, UserRole.MANAGER]:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Get the manager
+    manager = db.query(Employee).filter(Employee.id == manager_id).first()
+    if not manager:
+        raise HTTPException(status_code=404, detail="Manager not found")
+    
+    # Get team members
+    team_members = db.query(Employee).filter(
+        Employee.manager_id == manager_id,
+        Employee.is_active == True
+    ).all()
+    
+    # Get all applications
+    all_applications = db.query(LeaveApplication).filter(
+        LeaveApplication.manager_id == manager_id
+    ).all()
+    
+    # Get pending applications
+    pending_applications = db.query(LeaveApplication).filter(
+        LeaveApplication.manager_id == manager_id,
+        LeaveApplication.status == LeaveStatus.PENDING
+    ).all()
+    
+    return {
+        "manager": {
+            "id": manager.id,
+            "name": manager.name,
+            "role": manager.user_role.value,
+            "department": manager.department
+        },
+        "team_members": [
+            {
+                "id": emp.id,
+                "name": emp.name,
+                "department": emp.department
+            }
+            for emp in team_members
+        ],
+        "applications": {
+            "total": len(all_applications),
+            "pending": len(pending_applications),
+            "all_apps": [
+                {
+                    "id": app.id,
+                    "number": app.application_number,
+                    "employee": app.employee.name,
+                    "status": app.status.value,
+                    "dates": f"{app.start_date} to {app.end_date}"
+                }
+                for app in all_applications
+            ]
+        }
+    }
+
+# Also add this simpler debug endpoint
+@app.get("/api/debug/applications")
+async def debug_all_applications(
+    current_employee: Employee = Depends(get_current_employee),
+    db: Session = Depends(get_db)
+):
+    """Debug all applications in the system"""
+    if current_employee.user_role not in [UserRole.HR_ADMIN]:
+        raise HTTPException(status_code=403, detail="HR Admin only")
+    
+    applications = db.query(LeaveApplication).all()
+    
+    return {
+        "total_applications": len(applications),
+        "applications": [
+            {
+                "id": app.id,
+                "number": app.application_number,
+                "employee_id": app.employee_id,
+                "employee_name": app.employee.name,
+                "manager_id": app.manager_id,
+                "status": app.status.value,
+                "start_date": app.start_date.isoformat(),
+                "end_date": app.end_date.isoformat()
+            }
+            for app in applications
+        ]
+    }
 # Startup event
 @app.on_event("startup")
 async def startup_event():

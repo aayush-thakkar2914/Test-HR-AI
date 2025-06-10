@@ -21,11 +21,126 @@ class AIService:
             print(f"Error initializing Groq client: {e}")
             self.groq_client = None
     
-    def classify_query_intent(self, query: str) -> str:
-        """Enhanced intent classification including leave management"""
+    def classify_query_intent(self, query: str, employee_context: Dict = None) -> str:
+        """Enhanced intent classification using Groq AI model"""
+        
+        if not employee_context:
+            employee_context = {}
+        
+        # Build intent classification prompt
+        prompt = self.build_intent_classification_prompt(query, employee_context)
+        
+        if self.groq_client:
+            try:
+                response = self.groq_client.chat.completions.create(
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are an expert HR intent classifier. Analyze the user query and classify it into the most appropriate category. Return only the intent category name."
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    model="llama-3.3-70b-versatile",
+                    temperature=0.1,
+                    max_tokens=50
+                )
+                
+                if response and response.choices and len(response.choices) > 0:
+                    ai_intent = response.choices[0].message.content.strip().lower()
+                    
+                    # Map AI response to our intent categories
+                    intent_mapping = {
+                        'leave_balance': 'leave_balance',
+                        'leave_application': 'leave_application', 
+                        'leave_status': 'leave_status',
+                        'leave_cancellation': 'leave_cancellation',
+                        'emergency_leave': 'emergency_leave',
+                        'manager_query': 'manager_query',
+                        'leave_policy': 'leave_policy',
+                        'benefits': 'benefits',
+                        'policy': 'policy',
+                        'payroll': 'payroll',
+                        'conduct': 'conduct',
+                        'general': 'general'
+                    }
+                    
+                    # Find best match
+                    for key in intent_mapping:
+                        if key in ai_intent:
+                            print(f"DEBUG: Groq classified '{query}' as '{key}'")
+                            return intent_mapping[key]
+                    
+                    print(f"DEBUG: Groq returned unmapped intent: '{ai_intent}', using fallback")
+                    return self.fallback_intent_classification(query)
+                    
+            except Exception as e:
+                print(f"Error with Groq intent classification: {e}")
+                return self.fallback_intent_classification(query)
+        
+        # Fallback to keyword-based classification
+        return self.fallback_intent_classification(query)
+    
+    def build_intent_classification_prompt(self, query: str, employee_context: Dict) -> str:
+        """Build prompt for intent classification"""
+        
+        user_role = employee_context.get('user_role', 'employee')
+        
+        prompt = f"""
+Classify the following HR-related query into one of these categories:
+
+EMPLOYEE QUERIES:
+- leave_balance: Questions about remaining leave days, balance checks
+- leave_application: Requests to apply for leave, time off requests
+- leave_status: Questions about existing leave application status
+- leave_cancellation: Requests to cancel existing leave applications
+- emergency_leave: Urgent leave requests requiring immediate attention
+- leave_policy: Questions about leave policies and rules
+- benefits: Questions about health insurance, retirement, benefits
+- policy: Questions about company policies and procedures
+- payroll: Questions about salary, pay, compensation
+- conduct: Questions about workplace behavior and guidelines
+
+MANAGER/HR QUERIES:
+- manager_query: Manager asking about team leave, pending approvals, team schedules
+
+GENERAL:
+- general: Any other HR-related questions
+
+USER CONTEXT:
+- User Role: {user_role}
+- Query: "{query}"
+
+CLASSIFICATION RULES:
+1. If user is a manager/HR and asks about "pending", "approval", "team leave" → manager_query
+2. If asking about "balance", "remaining", "how many days" → leave_balance  
+3. If requesting leave with dates/duration → leave_application
+4. If asking "where is my", "status of", "approved" → leave_status
+5. If contains "emergency", "urgent", "asap" → emergency_leave
+6. If asking about "cancel", "withdraw" leave → leave_cancellation
+
+Return only the category name (e.g., "leave_balance", "manager_query", etc.):
+"""
+        
+        return prompt
+    
+    def fallback_intent_classification(self, query: str) -> str:
+        """Fallback intent classification using keyword matching"""
         query_lower = query.lower()
         
-        # Leave-related intents (priority check) - more comprehensive patterns
+        # Manager/HR patterns - check first for specificity
+        manager_keywords = ['pending', 'approval', 'approve', 'team', 'applications', 'requests']
+        if any(word in query_lower for word in manager_keywords):
+            manager_patterns = [
+                'pending leave', 'leave approval', 'team leave', 'who is on leave',
+                'leave requests', 'pending applications', 'show me pending'
+            ]
+            if any(pattern in query_lower for pattern in manager_patterns):
+                return 'manager_query'
+        
+        # Leave-related intents (priority check)
         leave_keywords = ['leave', 'vacation', 'holiday', 'time off', 'pto', 'days off', 'day off']
         balance_keywords = ['balance', 'remaining', 'left', 'how many', 'check my']
         apply_keywords = ['apply', 'request', 'take', 'book', 'need', 'want', 'get']
@@ -77,36 +192,13 @@ class AIService:
         
         # Check for specific leave application patterns even without "leave" keyword
         application_patterns = [
-            'i need * days',
-            'i want * days',
-            'can i get * days',
-            'december *',
-            'january *',
-            'from * to *',
-            '* for * days'
+            'i need * days', 'i want * days', 'can i get * days',
+            'december *', 'january *', 'from * to *', '* for * days'
         ]
         
         for pattern in application_patterns:
             if self._matches_pattern(query_lower, pattern):
                 return 'leave_application'
-        
-        # Manager/HR queries
-        manager_keywords = ['pending', 'approval', 'approve', 'team', 'applications', 'requests']
-        if any(word in query_lower for word in manager_keywords) and has_leave_term:
-            return 'manager_query'
-        
-        # Specific manager patterns
-        manager_patterns = [
-            'pending leave',
-            'leave approval',
-            'team leave',
-            'who is on leave',
-            'leave requests',
-            'pending applications'
-        ]
-        
-        if any(pattern in query_lower for pattern in manager_patterns):
-            return 'manager_query'
         
         # Other HR intents
         if any(word in query_lower for word in ['benefit', 'insurance', 'health', '401k', 'retirement']):
@@ -229,17 +321,25 @@ class AIService:
     def generate_hr_response(self, query: str, employee, relevant_docs: List[Dict], intent_classification: Dict = None) -> Dict:
         """Enhanced HR response generation with leave management support"""
         
-        # Check if this is a leave-related query
-        intent = self.classify_query_intent(query)
+        # Get employee context for intent classification
+        employee_context = {
+            "name": employee.name,
+            "department": employee.department,
+            "role": employee.role,
+            "user_role": employee.user_role.value
+        }
         
-        if intent.startswith('leave_'):
+        # Check if this is a leave-related query using enhanced classification
+        intent = self.classify_query_intent(query, employee_context)
+        
+        if intent.startswith('leave_') or intent == 'manager_query':
             # Delegate to leave service for specialized handling
-            return self.generate_leave_response(query, employee, intent_classification)
+            return self.generate_leave_response(query, employee, intent_classification, intent)
         
         # Handle non-leave queries with existing logic
         return self.generate_standard_hr_response(query, employee, relevant_docs)
     
-    def generate_leave_response(self, query: str, employee, intent_classification: Dict = None) -> Dict:
+    def generate_leave_response(self, query: str, employee, intent_classification: Dict = None, detected_intent: str = None) -> Dict:
         """Generate response for leave-related queries"""
         
         if intent_classification and "response" in intent_classification:
@@ -248,16 +348,24 @@ class AIService:
                 "response": intent_classification["response"],
                 "confidence": intent_classification.get("confidence", 0.8),
                 "source_documents": [],
-                "intent": intent_classification.get("primary_intent", "leave_general")
+                "intent": intent_classification.get("primary_intent", detected_intent or "leave_general")
             }
         
         # Fallback for leave queries when leave service is not available
-        return {
-            "response": f"Hi {employee.name}! I can help you with leave management. Please ask me about your leave balance, applying for leave, or checking application status.",
-            "confidence": 0.7,
-            "source_documents": [],
-            "intent": "leave_general"
-        }
+        if detected_intent == 'manager_query':
+            return {
+                "response": f"Hi {employee.name}! As a manager, I can help you with team leave management. Please ask about pending approvals, team leave overview, or specific leave requests.",
+                "confidence": 0.7,
+                "source_documents": [],
+                "intent": "manager_query"
+            }
+        else:
+            return {
+                "response": f"Hi {employee.name}! I can help you with leave management. Please ask me about your leave balance, applying for leave, or checking application status.",
+                "confidence": 0.7,
+                "source_documents": [],
+                "intent": detected_intent or "leave_general"
+            }
     
     def generate_standard_hr_response(self, query: str, employee, relevant_docs: List[Dict]) -> Dict:
         """Generate AI response using Groq API with HR context"""
@@ -343,6 +451,7 @@ class AIService:
                 'leave_balance': f"Hi {employee.name}! I can help you check your leave balance. Please contact HR or check your employee portal for current balance information.",
                 'leave_application': f"Hi {employee.name}! I can help you apply for leave. Please provide the dates you need and the type of leave (vacation, sick, personal, etc.).",
                 'leave_status': f"Hi {employee.name}! I can help you check your leave application status. Please provide your application number or tell me about the leave you applied for.",
+                'manager_query': f"Hi {employee.name}! As a manager, I can help you with team leave management, pending approvals, and team schedules.",
                 'benefits': f"Hello {employee.name}! For benefits information, please check our Benefits Guide or contact HR. We offer health insurance, retirement benefits, professional development opportunities, and other employee benefits.",
                 'policy': f"Hi {employee.name}! For policy-related questions, please refer to our policy documents or contact HR directly. All company policies are available in the employee handbook.",
                 'conduct': f"Hello {employee.name}! For questions about conduct and workplace guidelines, please refer to our Code of Conduct or contact HR for clarification.",

@@ -8,6 +8,8 @@ import re
 from dateutil import parser
 from decimal import Decimal
 
+from app.models import UserRole
+
 class LeaveIntentAgent:
     """Agentic AI system for sophisticated leave management intent classification"""
     
@@ -22,7 +24,7 @@ class LeaveIntentAgent:
     
     def classify_leave_intent(self, message: str, employee_context: Dict, conversation_history: List = None) -> Dict:
         """
-        Advanced agentic intent classification for leave management
+        Advanced agentic intent classification for leave management - FIXED VERSION
         """
         
         # Build context-aware prompt
@@ -46,14 +48,23 @@ class LeaveIntentAgent:
                     max_tokens=800
                 )
                 
-                # Parse AI response
-                ai_response = response.choices[0].message.content
-                return self.parse_intent_response(ai_response)
+                # Parse AI response - FIXED NULL CHECK
+                if response and response.choices and len(response.choices) > 0:
+                    ai_response = response.choices[0].message.content
+                    if ai_response:
+                        return self.parse_intent_response(ai_response)
+                    else:
+                        print("WARNING: Groq returned empty response content")
+                        return self.fallback_intent_classification(message, employee_context)
+                else:
+                    print("WARNING: Groq returned invalid response structure")
+                    return self.fallback_intent_classification(message, employee_context)
                 
             except Exception as e:
                 print(f"Groq API error in intent classification: {e}")
                 return self.fallback_intent_classification(message, employee_context)
         else:
+            print("WARNING: Groq client not available, using fallback")
             return self.fallback_intent_classification(message, employee_context)
     
     def build_intent_classification_prompt(self, message: str, employee_context: Dict, conversation_history: List = None) -> str:
@@ -92,39 +103,34 @@ EMPLOYEE PROFILE:
 - Department: {employee_context.get('department', 'Unknown')}
 - Role: {employee_context.get('role', 'Unknown')}
 - Employee ID: {employee_context.get('employee_id', 'Unknown')}
+- User Role: {employee_context.get('user_role', 'employee')}
 - Current Leave Balances: {json.dumps(employee_context.get('leave_balances', {}), indent=2)}
 
 {history_context}
 
 CURRENT USER MESSAGE: "{message}"
 
-CONTEXT ANALYSIS INSTRUCTIONS:
-1. **ALWAYS consider the conversation history** when classifying intent
-2. **If the assistant just asked for information** (dates, leave type, duration), treat the current message as providing that information
-3. **Look for contextual clues** like "15th June" following a request for dates
-4. **Maintain conversation continuity** - don't start over if we're mid-conversation
-5. **Recognize follow-up responses** to assistant questions
-
 ENHANCED INTENT CLASSIFICATION:
-Based on conversation history and current message, determine the primary intent:
+Based on conversation history, user role, and current message, determine the primary intent:
 
 1. CHECK_BALANCE - Employee wants to know remaining leave days
-2. APPLY_LEAVE - Employee wants to submit a leave application (includes follow-up responses with missing info)
+2. APPLY_LEAVE - Employee wants to submit a leave application 
 3. CHECK_STATUS - Employee wants status of existing application  
 4. MODIFY_LEAVE - Employee wants to change existing application
 5. CANCEL_LEAVE - Employee wants to cancel pending/approved leave
 6. LEAVE_POLICY - Questions about leave policies and rules
 7. EMERGENCY_LEAVE - Urgent/immediate leave needed (same day/next day)
 8. LEAVE_PLANNING - Future leave planning assistance
-9. MANAGER_QUERY - Manager asking about team member's leave
+9. MANAGER_QUERY - Manager/HR asking about team leave, pending approvals, team schedules
 10. GENERAL_HR - General HR query not specifically about leave
-11. FOLLOW_UP_INFO - User providing requested information in a multi-turn conversation
 
-SMART ENTITY EXTRACTION:
-- **Context-Aware Date Parsing**: If previous message asked for dates, parse current message as date information
-- **Conversation-Based Leave Type**: Look at conversation history for leave type context
-- **Duration Inference**: Use conversation context to understand duration references
-- **Follow-up Detection**: Identify when user is responding to assistant's questions
+CRITICAL CLASSIFICATION RULES:
+- If user role is "manager", "hr_manager", or "hr_admin" AND message contains "pending", "approval", "approve", "team" → MANAGER_QUERY
+- If message asks "show me pending leave approvals" → MANAGER_QUERY
+- If asking about "balance", "remaining", "how many days" → CHECK_BALANCE
+- If requesting leave with dates/duration → APPLY_LEAVE
+- If asking "where is my", "status of", "approved" → CHECK_STATUS
+- If contains "emergency", "urgent", "asap" → EMERGENCY_LEAVE
 
 OUTPUT FORMAT (JSON):
 {{
@@ -163,23 +169,23 @@ OUTPUT FORMAT (JSON):
         "Process leave application with provided date",
         "Confirm leave type and duration"
     ],
-    "confidence_reasoning": "User provided start date '15th June' in response to assistant's request for leave application information. Clear continuation of leave application process.",
-    "suggested_ai_response": "Perfect! I have your start date as June 15th. Now I need to know: 1) How many days do you need? 2) What type of leave is this (vacation, sick, personal)? 3) What's the reason for your leave?"
+    "confidence_reasoning": "User with {employee_context.get('user_role', 'employee')} role asking about pending approvals - clearly a manager query.",
+    "suggested_ai_response": "I'll help you review pending leave applications for your team."
 }}
 
-CRITICAL CONTEXT RULES:
-- If conversation shows assistant asked for information and user responds, classify as APPLY_LEAVE (continuation)
-- Always extract dates even if format is informal ("15th June", "next Monday")
-- Use conversation history to fill in missing context
-- Maintain high confidence when context is clear from conversation flow
-- Recognize that users often provide information piece by piece in conversations
+CRITICAL: Pay special attention to user role when classifying manager queries!
 """
         
         return prompt
     
     def parse_intent_response(self, ai_response: str) -> Dict:
-        """Parse and validate AI intent classification response"""
+        """Parse and validate AI intent classification response - FIXED VERSION"""
         try:
+            # Check if ai_response is None or empty
+            if not ai_response:
+                print("WARNING: AI response is None or empty")
+                return self.create_default_intent_response()
+            
             # Extract JSON from response (handle cases where AI adds explanation)
             json_start = ai_response.find('{')
             json_end = ai_response.rfind('}') + 1
@@ -191,10 +197,16 @@ CRITICAL CONTEXT RULES:
                 # Validate and normalize response
                 return self.validate_intent_response(intent_data)
             else:
-                raise ValueError("No valid JSON found in AI response")
+                print(f"WARNING: No valid JSON found in AI response: {ai_response}")
+                return self.create_default_intent_response()
                 
+        except json.JSONDecodeError as e:
+            print(f"JSON decode error in intent response: {e}")
+            print(f"Raw response: {ai_response}")
+            return self.create_default_intent_response()
         except Exception as e:
             print(f"Error parsing intent response: {e}")
+            print(f"Raw response: {ai_response}")
             return self.create_default_intent_response()
     
     def validate_intent_response(self, intent_data: Dict) -> Dict:
@@ -251,16 +263,40 @@ CRITICAL CONTEXT RULES:
         return validated_dates
     
     def fallback_intent_classification(self, message: str, employee_context: Dict) -> Dict:
-        """Fallback intent classification when Groq API is unavailable"""
+        """Enhanced fallback intent classification when Groq API is unavailable"""
         
         message_lower = message.lower()
+        user_role = employee_context.get('user_role', 'employee')
         
-        # Simple keyword-based fallback
+        print(f"DEBUG: Fallback classification - Message: '{message}', User Role: {user_role}")
+        
+        # Enhanced keyword detection for manager queries - CHECK USER ROLE FIRST
+        manager_keywords = [
+            'pending', 'approval', 'approve', 'waiting', 'applications', 
+            'requests', 'team', 'staff', 'employees', 'review'
+        ]
+        
+        # If user is manager/HR and asking about management topics
+        if user_role in ['manager', 'hr_manager', 'hr_admin']:
+            if any(word in message_lower for word in manager_keywords):
+                print(f"DEBUG: Manager/HR user asking about management topics → MANAGER_QUERY")
+                return {
+                    "primary_intent": "MANAGER_QUERY",
+                    "confidence": 0.9,
+                    "urgency_level": "normal",
+                    "extracted_entities": {},
+                    "business_context": {},
+                    "suggested_next_steps": ["Show pending approvals"],
+                    "confidence_reasoning": f"User with {user_role} role asking about {', '.join([w for w in manager_keywords if w in message_lower])}",
+                    "suggested_ai_response": "I'll help you review pending leave applications for your team."
+                }
+        
+        # Standard leave classification for all users
         if any(word in message_lower for word in ['balance', 'remaining', 'left', 'how many']):
             intent = "CHECK_BALANCE"
-        elif any(word in message_lower for word in ['apply', 'request', 'take leave', 'need time off']):
+        elif any(word in message_lower for word in ['apply', 'request', 'take leave', 'need time off', 'days off']):
             intent = "APPLY_LEAVE"
-        elif any(word in message_lower for word in ['status', 'approved', 'pending', 'where is my']):
+        elif any(word in message_lower for word in ['status', 'approved', 'where is my']):
             intent = "CHECK_STATUS"
         elif any(word in message_lower for word in ['cancel', 'withdraw', 'remove']):
             intent = "CANCEL_LEAVE"
@@ -271,6 +307,8 @@ CRITICAL CONTEXT RULES:
         else:
             intent = "GENERAL_HR"
         
+        print(f"DEBUG: Classified as: {intent}")
+        
         return {
             "primary_intent": intent,
             "confidence": 0.6,
@@ -278,7 +316,7 @@ CRITICAL CONTEXT RULES:
             "extracted_entities": {},
             "business_context": {},
             "suggested_next_steps": [],
-            "confidence_reasoning": "Fallback keyword-based classification",
+            "confidence_reasoning": f"Fallback keyword-based classification detected '{intent}'",
             "suggested_ai_response": f"I'll help you with your {intent.lower().replace('_', ' ')} request."
         }
     
@@ -431,6 +469,8 @@ class LeaveService:
             return handler(db, intent_result, employee, original_message)
         except Exception as e:
             print(f"Error in leave handler {intent}: {e}")
+            import traceback
+            traceback.print_exc()
             # Fallback response
             return {
                 "response": f"Hi {employee.name}! I'm having trouble processing your request right now. Could you please try rephrasing your question or contact HR directly for assistance?",
@@ -565,20 +605,91 @@ class LeaveService:
             "missing_information": missing_info
         }
     
+    def get_employee_manager(self, db: Session, employee) -> Optional[int]:
+        """Get manager ID for an employee - FIXED VERSION"""
+        from ..models import Employee, UserRole
+        
+        # Check if employee already has a manager_id set
+        if hasattr(employee, 'manager_id') and employee.manager_id:
+            print(f"DEBUG: Employee {employee.name} already has manager_id: {employee.manager_id}")
+            return employee.manager_id
+        
+        # Auto-assign manager based on department and role hierarchy
+        try:
+            # Look for HR Manager first (can manage any department)
+            hr_manager = db.query(Employee).filter(
+                Employee.user_role == UserRole.HR_MANAGER,
+                Employee.is_active == True
+            ).first()
+            
+            # Look for a regular manager in the same department
+            dept_manager = db.query(Employee).filter(
+                Employee.user_role == UserRole.MANAGER,
+                Employee.department == employee.department,
+                Employee.is_active == True,
+                Employee.id != employee.id  # Don't assign self as manager
+            ).first()
+            
+            # Priority: Department manager > HR manager
+            if dept_manager:
+                manager_id = dept_manager.id
+                print(f"DEBUG: Assigning department manager {dept_manager.name} (ID: {manager_id}) to {employee.name}")
+            elif hr_manager:
+                manager_id = hr_manager.id
+                print(f"DEBUG: Assigning HR manager {hr_manager.name} (ID: {manager_id}) to {employee.name}")
+            else:
+                # No managers found, use HR Admin as fallback
+                hr_admin = db.query(Employee).filter(
+                    Employee.user_role == UserRole.HR_ADMIN,
+                    Employee.is_active == True
+                ).first()
+                
+                if hr_admin:
+                    manager_id = hr_admin.id
+                    print(f"DEBUG: Assigning HR admin {hr_admin.name} (ID: {manager_id}) as fallback manager to {employee.name}")
+                else:
+                    print(f"DEBUG: No manager found for {employee.name}")
+                    return None
+            
+            # Update employee record with manager assignment
+            employee.manager_id = manager_id
+            db.flush()
+            
+            return manager_id
+            
+        except Exception as e:
+            print(f"ERROR: Failed to assign manager to {employee.name}: {e}")
+            return None
+    
     def create_leave_application(self, db: Session, intent_result: Dict, employee) -> Dict:
-        """Create a new leave application"""
-        from ..models import LeaveApplication, LeaveType, LeaveStatus
+        """Create a new leave application - FIXED VERSION"""
+        from ..models import LeaveApplication, LeaveType, LeaveStatus, Employee
         
         try:
             entities = intent_result["extracted_entities"]
             dates = entities["dates"]
             
+            # Validate we have required information
+            if not dates.get("start_date"):
+                return {
+                    "response": "I need the start date for your leave application. Could you please specify when you'd like your leave to begin?",
+                    "confidence": 0.7,
+                    "follow_up_needed": True
+                }
+            
             # Parse dates
             start_date = parser.parse(dates["start_date"]).date()
-            end_date = parser.parse(dates["end_date"]).date() if dates["end_date"] else start_date
+            end_date = parser.parse(dates["end_date"]).date() if dates.get("end_date") else start_date
             
             # Calculate total days
             total_days = (end_date - start_date).days + 1
+            
+            if total_days <= 0:
+                return {
+                    "response": "The end date must be on or after the start date. Please check your dates and try again.",
+                    "confidence": 0.8,
+                    "follow_up_needed": True
+                }
             
             # Determine leave type
             leave_type_str = entities.get("leave_type", "annual")
@@ -590,8 +701,10 @@ class LeaveService:
             # Generate application number
             app_number = self.generate_application_number(db)
             
-            # Get manager ID (if available)
-            manager_id = employee.manager_id if hasattr(employee, 'manager_id') else None
+            # Get manager ID - THIS IS THE CRUCIAL FIX
+            manager_id = self.get_employee_manager(db, employee)
+            
+            print(f"DEBUG: Creating application for employee {employee.id} ({employee.name}), manager_id: {manager_id}")
             
             # Create application
             application = LeaveApplication(
@@ -609,29 +722,36 @@ class LeaveService:
             db.add(application)
             db.flush()  # Get the ID
             
+            print(f"DEBUG: Created application with ID {application.id}")
+            
             # Update leave balance (mark as pending)
             self.update_leave_balance_pending(db, employee.id, leave_type, total_days)
             
             db.commit()
             
+            print(f"DEBUG: Successfully committed application {app_number}")
+            
             # Generate confirmation response
             response = f"✅ **Leave Application Submitted Successfully!**\n\n"
             response += f"📋 **Application Details:**\n"
-            response += f"   • Application Number: {app_number}\n"
-            response += f"   • Leave Type: {leave_type.value.title()}\n"
-            response += f"   • Dates: {start_date.strftime('%B %d, %Y')} to {end_date.strftime('%B %d, %Y')}\n"
-            response += f"   • Duration: {total_days} day(s)\n"
-            response += f"   • Reason: {entities.get('reason', 'Personal leave')}\n\n"
+            response += f"   • **Application Number**: {app_number}\n"
+            response += f"   • **Employee**: {employee.name}\n"
+            response += f"   • **Leave Type**: {leave_type.value.title()}\n"
+            response += f"   • **Dates**: {start_date.strftime('%B %d, %Y')} to {end_date.strftime('%B %d, %Y')}\n"
+            response += f"   • **Duration**: {total_days} day(s)\n"
+            response += f"   • **Reason**: {entities.get('reason', 'Personal leave')}\n\n"
             
             if manager_id:
-                response += f"🔄 **Next Steps:**\n"
-                response += f"   • Your application has been sent to your manager for approval\n"
-                response += f"   • You'll receive notifications on status updates\n"
-                response += f"   • You can check status anytime by asking me\n\n"
+                manager = db.query(Employee).filter(Employee.id == manager_id).first()
+                manager_name = manager.name if manager else "your manager"
+                response += f"🔄 **Approval Process:**\n"
+                response += f"   • Step 1: Manager approval ({manager_name}) ⏳\n"
+                response += f"   • Step 2: HR final approval\n"
+                response += f"   • You'll receive updates on status changes\n\n"
             else:
-                response += f"⚠️ **Note:** No manager assigned. Please contact HR for approval process.\n\n"
+                response += f"⚠️ **Note**: No manager assigned. Please contact HR for approval process.\n\n"
             
-            response += f"💡 **Tip:** Save your application number {app_number} for future reference!"
+            response += f"💡 **Tip**: Save your application number {app_number} for future reference!"
             
             return {
                 "response": response,
@@ -643,6 +763,9 @@ class LeaveService:
             
         except Exception as e:
             db.rollback()
+            print(f"ERROR: Exception in create_leave_application: {e}")
+            import traceback
+            traceback.print_exc()
             return {
                 "response": f"I encountered an error while processing your leave application: {str(e)}. Please try again or contact HR for assistance.",
                 "confidence": 0.3,
@@ -650,22 +773,29 @@ class LeaveService:
             }
     
     def handle_status_inquiry(self, db: Session, intent_result: Dict, employee, message: str) -> Dict:
-        """Handle leave application status inquiries"""
+        """Handle leave application status inquiries - FIXED VERSION"""
         from ..models import LeaveApplication
         
         # Get recent applications for this employee
         applications = db.query(LeaveApplication).filter(
             LeaveApplication.employee_id == employee.id
-        ).order_by(LeaveApplication.applied_date.desc()).limit(5).all()
+        ).order_by(LeaveApplication.applied_date.desc()).limit(10).all()
+        
+        print(f"DEBUG: Found {len(applications)} applications for employee {employee.id} ({employee.name})")
         
         if not applications:
-            response = f"Hi {employee.name}! I don't see any leave applications in our system. Would you like to apply for leave?"
-            return {"response": response, "confidence": 0.9}
+            response = f"Hi {employee.name}! I don't see any leave applications in our system yet. "
+            response += f"Would you like me to help you apply for leave? Just tell me the dates and type of leave you need!"
+            return {
+                "response": response, 
+                "confidence": 0.9,
+                "follow_up_needed": True
+            }
         
         # Format status information
         response = f"Hi {employee.name}! Here's the status of your recent leave applications:\n\n"
         
-        for app in applications:
+        for i, app in enumerate(applications, 1):
             status_emoji = {
                 "pending": "⏳",
                 "manager_approved": "✅",
@@ -674,26 +804,465 @@ class LeaveService:
                 "cancelled": "🚫"
             }.get(app.status.value, "❓")
             
-            response += f"{status_emoji} **{app.application_number}**\n"
-            response += f"   • Type: {app.leave_type.value.title()}\n"
-            response += f"   • Dates: {app.start_date.strftime('%b %d')} - {app.end_date.strftime('%b %d, %Y')}\n"
-            response += f"   • Status: {app.status.value.replace('_', ' ').title()}\n"
-            response += f"   • Applied: {app.applied_date.strftime('%b %d, %Y')}\n"
+            response += f"{status_emoji} **Application #{i}: {app.application_number}**\n"
+            response += f"   • **Type**: {app.leave_type.value.title()} Leave\n"
+            response += f"   • **Dates**: {app.start_date.strftime('%b %d')} - {app.end_date.strftime('%b %d, %Y')}\n"
+            response += f"   • **Duration**: {float(app.total_days)} day(s)\n"
+            response += f"   • **Status**: {app.status.value.replace('_', ' ').title()}\n"
+            response += f"   • **Applied**: {app.applied_date.strftime('%b %d, %Y')}\n"
+            
+            if app.reason:
+                response += f"   • **Reason**: {app.reason}\n"
             
             if app.manager_comments:
-                response += f"   • Manager Notes: {app.manager_comments}\n"
+                response += f"   • **Manager Notes**: {app.manager_comments}\n"
             if app.hr_comments:
-                response += f"   • HR Notes: {app.hr_comments}\n"
+                response += f"   • **HR Notes**: {app.hr_comments}\n"
+            
+            # Show next steps based on status
+            if app.status.value == "pending":
+                response += f"   • **Next Step**: Waiting for manager approval\n"
+            elif app.status.value == "manager_approved":
+                response += f"   • **Next Step**: Waiting for HR final approval\n"
+            elif app.status.value == "approved":
+                response += f"   • **Status**: ✅ Approved and processed\n"
             
             response += "\n"
         
-        response += "💡 Need help with any of these applications? Just ask!"
+        response += "💡 **Need help with any applications?** Ask me to:\n"
+        response += "   • Check balance: 'What's my leave balance?'\n"
+        response += "   • Apply for new leave: 'I need 2 days off next week'\n"
+        response += "   • Get policy info: 'What's the leave policy?'"
         
         return {
             "response": response,
             "confidence": 0.95,
-            "actions_performed": ["status_lookup"]
+            "actions_performed": ["status_lookup"],
+            "applications_found": len(applications)
         }
+    # QUICK FIX for app/services/leave_service.py
+#    Replace the handle_manager_query method with this fixed version:
+
+    def handle_manager_query(self, db: Session, intent_result: Dict, employee, message: str) -> Dict:
+        """Handle manager queries about team leave - IMMEDIATE FIX"""
+        from ..models import LeaveApplication, LeaveStatus, UserRole
+        
+        # Verify user has manager/HR permissions
+        if employee.user_role not in [UserRole.MANAGER, UserRole.HR_MANAGER, UserRole.HR_ADMIN]:
+            return {
+                "response": "I can only provide team leave information to managers and HR personnel. If you believe you should have manager access, please contact HR.",
+                "confidence": 0.9
+            }
+        
+        message_lower = message.lower()
+        
+        print(f"DEBUG: Manager query from {employee.name} (Role: {employee.user_role.value}): '{message}'")
+        
+        # FORCE DIRECT CALL TO PENDING APPROVALS - this is the key fix
+        if any(word in message_lower for word in ['pending', 'approval', 'approve', 'waiting', 'applications', 'requests']):
+            print(f"DEBUG: Detected pending approval request, calling get_pending_approvals_for_manager directly")
+            return self.get_pending_approvals_for_manager(db, employee)
+        
+        # If the message contains "show me" or similar, also route to pending approvals
+        if any(phrase in message_lower for phrase in ['show me', 'show pending', 'list pending', 'pending leave']):
+            print(f"DEBUG: Detected 'show me' request, calling get_pending_approvals_for_manager directly")
+            return self.get_pending_approvals_for_manager(db, employee)
+        
+        # Check if asking for team leave overview
+        elif any(word in message_lower for word in ['team', 'overview', 'calendar', 'schedule', 'upcoming']):
+            return self.get_team_leave_overview(db, employee)
+        
+        # DEFAULT: For any manager query that we're not sure about, show pending approvals
+        else:
+            print(f"DEBUG: Generic manager query, defaulting to pending approvals")
+            return self.get_pending_approvals_for_manager(db, employee)
+
+# ALSO ADD this debugging method to help troubleshoot:
+    def debug_manager_applications(self, db: Session, employee) -> Dict:
+        """Debug method to check what applications exist for a manager"""
+        from ..models import LeaveApplication, Employee
+        
+        print(f"=== DEBUGGING MANAGER APPLICATIONS FOR {employee.name} (ID: {employee.id}) ===")
+        
+        # Get ALL applications in the system
+        all_apps = db.query(LeaveApplication).all()
+        print(f"Total applications in system: {len(all_apps)}")
+        
+        for app in all_apps:
+            print(f"App {app.application_number}:")
+            print(f"  - Employee: {app.employee.name} (ID: {app.employee_id})")
+            print(f"  - Manager: {app.manager_id}")
+            print(f"  - Status: {app.status.value}")
+            print(f"  - Dates: {app.start_date} to {app.end_date}")
+        
+        # Check manager assignments
+        team_members = db.query(Employee).filter(Employee.manager_id == employee.id).all()
+        print(f"Team members reporting to {employee.name}: {len(team_members)}")
+        for member in team_members:
+            print(f"  - {member.name} (ID: {member.id})")
+        
+        return {
+            "total_apps": len(all_apps),
+            "team_members": len(team_members)
+        }
+
+    # REPLACE the get_pending_approvals_for_manager method with this SIMPLIFIED version:
+    def get_pending_approvals_for_manager(self, db: Session, employee) -> Dict:
+        """SIMPLIFIED version to fix the immediate issue"""
+        from ..models import LeaveApplication, LeaveStatus, UserRole, Employee
+        
+        try:
+            print(f"DEBUG: Getting pending approvals for {employee.name} (Role: {employee.user_role.value}, ID: {employee.id})")
+            
+            # Call debug method to see what's in the database
+            self.debug_manager_applications(db, employee)
+            
+            # SIMPLIFIED QUERY - Get applications based on user role
+            if employee.user_role in [UserRole.HR_MANAGER, UserRole.HR_ADMIN]:
+                # HR can see all pending applications
+                applications = db.query(LeaveApplication).filter(
+                    LeaveApplication.status.in_([LeaveStatus.PENDING, LeaveStatus.MANAGER_APPROVED])
+                ).all()
+                user_type = "HR"
+                
+            elif employee.user_role == UserRole.MANAGER:
+                # Managers see applications where they are assigned as manager
+                applications = db.query(LeaveApplication).filter(
+                    LeaveApplication.manager_id == employee.id,
+                    LeaveApplication.status == LeaveStatus.PENDING
+                ).all()
+                user_type = "Manager"
+                
+            else:
+                return {
+                    "response": "Access denied. Only managers and HR can view pending approvals.",
+                    "confidence": 0.9
+                }
+            
+            print(f"DEBUG: Found {len(applications)} applications for {user_type}")
+            
+            # If no applications found
+            if not applications:
+                response = f"✅ **No Pending Approvals Found**\n\n"
+                response += f"Hello {employee.name}! You currently have no leave applications pending your approval.\n\n"
+                
+                if employee.user_role == UserRole.MANAGER:
+                    # Show some helpful info for managers
+                    total_team_apps = db.query(LeaveApplication).filter(
+                        LeaveApplication.manager_id == employee.id
+                    ).count()
+                    
+                    response += f"📊 **Your Management Summary:**\n"
+                    response += f"   • Total applications you've managed: {total_team_apps}\n"
+                    response += f"   • Currently pending: 0\n\n"
+                    
+                    if total_team_apps == 0:
+                        team_members = db.query(Employee).filter(
+                            Employee.manager_id == employee.id,
+                            Employee.is_active == True
+                        ).all()
+                        
+                        response += f"👥 **Your Team ({len(team_members)} members):**\n"
+                        for member in team_members:
+                            response += f"   • {member.name}\n"
+                        response += "\n💡 When team members submit leave requests, they'll appear here.\n"
+                    
+                response += f"\n🔄 **What happens next:**\n"
+                response += f"   • New applications will appear here automatically\n"
+                response += f"   • You'll be notified when action is needed\n"
+                response += f"   • Ask me again anytime to check for updates"
+                
+                return {
+                    "response": response,
+                    "confidence": 0.95,
+                    "actions_performed": ["pending_check_completed"],
+                    "pending_count": 0
+                }
+            
+            # Format the applications we found
+            response = f"📋 **Pending Leave Approvals for {employee.name}**\n\n"
+            response += f"You have **{len(applications)}** application(s) requiring approval:\n\n"
+            
+            for i, app in enumerate(applications, 1):
+                urgency = "🚨" if app.leave_type.value == "emergency" else "📅"
+                
+                response += f"{urgency} **Application #{i}**\n"
+                response += f"   • **Employee**: {app.employee.name}\n"
+                response += f"   • **Application**: {app.application_number}\n"
+                response += f"   • **Type**: {app.leave_type.value.title()} Leave\n"
+                response += f"   • **Dates**: {app.start_date.strftime('%b %d')} - {app.end_date.strftime('%b %d, %Y')}\n"
+                response += f"   • **Duration**: {float(app.total_days)} day(s)\n"
+                response += f"   • **Reason**: {app.reason or 'Not specified'}\n"
+                response += f"   • **Applied**: {app.applied_date.strftime('%b %d, %Y')}\n\n"
+            
+            response += f"🔧 **To Approve/Reject:**\n"
+            response += f"   1. Visit the HR Management panel in the web interface\n"
+            response += f"   2. Or ask me: 'How do I approve these applications?'\n\n"
+            response += f"💡 Need help with the approval process? Just ask!"
+            
+            return {
+                "response": response,
+                "confidence": 0.95,
+                "actions_performed": ["pending_approvals_found"],
+                "pending_count": len(applications)
+            }
+            
+        except Exception as e:
+            print(f"ERROR in get_pending_approvals_for_manager: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            return {
+                "response": f"I encountered an error retrieving pending approvals: {str(e)}. Please try refreshing or contact IT support.",
+                "confidence": 0.3,
+                "error": str(e)
+            }
+        
+    def get_pending_approvals_for_manager(self, db: Session, employee) -> Dict:
+        """Get pending leave applications for manager/HR approval - ENHANCED VERSION"""
+        from ..models import LeaveApplication, LeaveStatus, UserRole, Employee
+        
+        try:
+            print(f"DEBUG: Getting pending approvals for {employee.name} (Role: {employee.user_role.value}, ID: {employee.id})")
+            
+            # Get applications pending approval based on user role
+            if employee.user_role == UserRole.HR_MANAGER or employee.user_role == UserRole.HR_ADMIN:
+                # HR can see all pending applications
+                applications = db.query(LeaveApplication).filter(
+                    LeaveApplication.status.in_([LeaveStatus.PENDING, LeaveStatus.MANAGER_APPROVED])
+                ).order_by(LeaveApplication.applied_date.asc()).all()
+                
+                print(f"DEBUG: HR user - found {len(applications)} total pending applications")
+                
+            elif employee.user_role == UserRole.MANAGER:
+                # Managers see applications where they are assigned as manager
+                applications = db.query(LeaveApplication).filter(
+                    LeaveApplication.manager_id == employee.id,
+                    LeaveApplication.status == LeaveStatus.PENDING
+                ).order_by(LeaveApplication.applied_date.asc()).all()
+                
+                print(f"DEBUG: Manager user - found {len(applications)} applications for manager_id {employee.id}")
+                
+                # Debug: Show what applications exist in the system
+                all_apps = db.query(LeaveApplication).all()
+                print(f"DEBUG: Total applications in system: {len(all_apps)}")
+                for app in all_apps:
+                    print(f"  - App {app.application_number}: Employee {app.employee_id} ({app.employee.name}), Manager {app.manager_id}, Status {app.status.value}")
+                
+            else:
+                return {
+                    "response": "I can only provide team leave information to managers and HR personnel.",
+                    "confidence": 0.9
+                }
+            
+            if not applications:
+                # Enhanced empty state response
+                total_apps = db.query(LeaveApplication).count()
+                print(f"DEBUG: Total applications in system: {total_apps}")
+                
+                response = f"✅ **No Pending Approvals, {employee.name}!**\n\n"
+                
+                if employee.user_role == UserRole.MANAGER:
+                    # Check if there are applications for this manager that are not pending
+                    all_manager_apps = db.query(LeaveApplication).filter(
+                        LeaveApplication.manager_id == employee.id
+                    ).all()
+                    
+                    response += f"📊 **Your Team Applications:**\n"
+                    response += f"   • Total applications managed: {len(all_manager_apps)}\n"
+                    response += f"   • Currently pending your approval: 0\n\n"
+                    
+                    if len(all_manager_apps) > 0:
+                        response += f"📋 **Recent Applications You've Managed:**\n"
+                        for app in all_manager_apps[-3:]:  # Last 3
+                            status_emoji = {"pending": "⏳", "manager_approved": "✅", "approved": "✅", "rejected": "❌"}.get(app.status.value, "❓")
+                            response += f"{status_emoji} {app.employee.name} - {app.leave_type.value.title()} ({app.start_date.strftime('%b %d')})\n"
+                        response += "\n"
+                    else:
+                        response += f"💡 **Note**: No team members have submitted leave applications yet.\n"
+                        response += f"When your team submits requests, they'll appear here for approval.\n\n"
+                        
+                        # Show team members
+                        team_members = db.query(Employee).filter(
+                            Employee.manager_id == employee.id,
+                            Employee.is_active == True
+                        ).all()
+                        
+                        if team_members:
+                            response += f"👥 **Your Team Members:**\n"
+                            for member in team_members:
+                                response += f"   • {member.name} ({member.department})\n"
+                            response += "\n"
+                
+                elif employee.user_role in [UserRole.HR_MANAGER, UserRole.HR_ADMIN]:
+                    if total_apps == 0:
+                        response += f"💡 **System Status**: No leave applications have been submitted yet.\n"
+                        response += f"When employees submit requests, they'll appear here for approval.\n\n"
+                    else:
+                        response += f"💡 **Current Status**: All {total_apps} submitted applications have been processed.\n\n"
+                        
+                        # Show recent processed applications for context
+                        recent_apps = db.query(LeaveApplication).filter(
+                            LeaveApplication.status.in_([LeaveStatus.HR_APPROVED, LeaveStatus.REJECTED])
+                        ).order_by(LeaveApplication.final_decision_date.desc()).limit(3).all()
+                        
+                        if recent_apps:
+                            response += f"📋 **Recently Processed:**\n"
+                            for app in recent_apps:
+                                status_emoji = "✅" if app.status == LeaveStatus.HR_APPROVED else "❌"
+                                response += f"{status_emoji} {app.employee.name} - {app.leave_type.value.title()} ({app.start_date.strftime('%b %d')})\n"
+                            response += "\n"
+                
+                response += f"🔄 **What you can do:**\n"
+                response += f"   • Ask 'Team leave overview' to see upcoming leave\n"
+                response += f"   • Check back later for new submissions\n"
+                response += f"   • Ask 'How do I approve applications?' for help"
+                
+                return {
+                    "response": response,
+                    "confidence": 0.95,
+                    "actions_performed": ["pending_approvals_check"],
+                    "total_applications": total_apps,
+                    "pending_count": 0
+                }
+            
+            # Format pending applications
+            response = f"📋 **Pending Leave Approvals for {employee.name}**\n\n"
+            response += f"You have **{len(applications)}** application(s) waiting for approval:\n\n"
+            
+            for i, app in enumerate(applications, 1):
+                urgency_emoji = "🚨" if app.leave_type.value == "emergency" else "📅"
+                
+                # Determine what kind of approval is needed
+                if app.status == LeaveStatus.PENDING:
+                    approval_type = "Manager Review Needed"
+                    next_action = "Primary approval required"
+                else:  # MANAGER_APPROVED
+                    approval_type = "HR Final Approval"
+                    next_action = "Final approval needed"
+                
+                response += f"{urgency_emoji} **Application #{i}**\n"
+                response += f"   • **Employee**: {app.employee.name} ({app.employee.department})\n"
+                response += f"   • **Application #**: {app.application_number}\n"
+                response += f"   • **Type**: {app.leave_type.value.title()} Leave\n"
+                response += f"   • **Dates**: {app.start_date.strftime('%b %d')} - {app.end_date.strftime('%b %d, %Y')}\n"
+                response += f"   • **Duration**: {float(app.total_days)} day(s)\n"
+                response += f"   • **Reason**: {app.reason or 'Not specified'}\n"
+                response += f"   • **Applied**: {app.applied_date.strftime('%b %d, %Y')}\n"
+                response += f"   • **Status**: {approval_type}\n"
+                response += f"   • **Action Needed**: {next_action}\n"
+                
+                if app.leave_type.value == "emergency":
+                    response += f"   • ⚠️ **URGENT**: Emergency leave - requires immediate attention\n"
+                
+                # Show manager comments if this is HR review
+                if app.status == LeaveStatus.MANAGER_APPROVED and app.manager_comments:
+                    response += f"   • **Manager Notes**: {app.manager_comments}\n"
+                
+                response += f"\n"
+            
+            response += f"🔧 **To Approve/Reject Applications:**\n"
+            response += f"   1. Visit the web interface's HR Management section\n"
+            response += f"   2. Use the API endpoints: `/api/leave/applications/{{id}}/approve` or `/reject`\n"
+            response += f"   3. Or ask me: 'How do I approve application {applications[0].application_number}?'\n\n"
+            
+            response += f"📊 **Quick Stats:**\n"
+            pending_count = len([app for app in applications if app.status == LeaveStatus.PENDING])
+            manager_approved_count = len([app for app in applications if app.status == LeaveStatus.MANAGER_APPROVED])
+            
+            if pending_count > 0:
+                response += f"   • {pending_count} awaiting manager approval\n"
+            if manager_approved_count > 0:
+                response += f"   • {manager_approved_count} awaiting HR approval\n"
+            
+            return {
+                "response": response,
+                "confidence": 0.95,
+                "actions_performed": ["pending_approvals_retrieved"],
+                "pending_count": len(applications),
+                "applications_breakdown": {
+                    "pending_manager": pending_count,
+                    "pending_hr": manager_approved_count
+                }
+            }
+            
+        except Exception as e:
+            print(f"ERROR in get_pending_approvals_for_manager: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "response": f"I encountered an error retrieving pending approvals: {str(e)}. Please try again or check the management panel directly.",
+                "confidence": 0.3,
+                "error": str(e)
+            }
+    
+    def get_pending_count(self, db: Session, employee) -> int:
+        """Get count of pending applications for quick stats"""
+        from ..models import LeaveApplication, LeaveStatus, UserRole
+        
+        query = db.query(LeaveApplication).filter(
+            LeaveApplication.status.in_([LeaveStatus.PENDING, LeaveStatus.MANAGER_APPROVED])
+        )
+        
+        if employee.user_role == UserRole.MANAGER:
+            query = query.filter(LeaveApplication.manager_id == employee.id)
+        
+        return query.count()
+    
+    def get_team_leave_overview(self, db: Session, employee) -> Dict:
+        """Get team leave overview for managers"""
+        from ..models import LeaveApplication, LeaveStatus
+        from datetime import date, timedelta
+        
+        try:
+            # Get approved leave for next 30 days
+            start_date = date.today()
+            end_date = start_date + timedelta(days=30)
+            
+            query = db.query(LeaveApplication).filter(
+                LeaveApplication.status == LeaveStatus.HR_APPROVED,
+                LeaveApplication.start_date <= end_date,
+                LeaveApplication.end_date >= start_date
+            )
+            
+            # Filter by team if manager
+            if employee.user_role == UserRole.MANAGER:
+                query = query.filter(LeaveApplication.manager_id == employee.id)
+            
+            upcoming_leave = query.order_by(LeaveApplication.start_date).all()
+            
+            if not upcoming_leave:
+                response = f"📅 **Team Leave Overview**\n\n"
+                response += f"✅ No approved leave scheduled for the next 30 days.\n"
+                response += f"Your team will be fully available! 🎉"
+                
+                return {
+                    "response": response,
+                    "confidence": 0.9
+                }
+            
+            response = f"📅 **Upcoming Team Leave (Next 30 Days)**\n\n"
+            
+            for app in upcoming_leave:
+                response += f"🏖️ **{app.employee.name}**\n"
+                response += f"   • {app.start_date.strftime('%b %d')} - {app.end_date.strftime('%b %d')}\n"
+                response += f"   • {app.leave_type.value.title()} Leave ({float(app.total_days)} days)\n"
+                response += f"   • Reason: {app.reason or 'Personal'}\n\n"
+            
+            response += f"💡 **Planning tip**: Consider workload distribution during these periods."
+            
+            return {
+                "response": response,
+                "confidence": 0.9,
+                "actions_performed": ["team_overview_generated"]
+            }
+            
+        except Exception as e:
+            return {
+                "response": f"Error generating team overview: {str(e)}",
+                "confidence": 0.3,
+                "error": str(e)
+            }
     
     def handle_leave_modification(self, db: Session, intent_result: Dict, employee, message: str) -> Dict:
         """Handle leave modification requests"""
@@ -705,15 +1274,6 @@ class LeaveService:
         response += f"   • New details\n\n"
         response += f"For example: 'I want to change my Dec 15-17 leave to Dec 20-22'\n\n"
         response += f"⚠️ **Note:** Only pending applications can be modified."
-        
-        return {
-            "response": response,
-            "confidence": 0.8,
-            "follow_up_needed": True
-        }
-        """Handle leave cancellation requests"""
-        # Implementation for cancellation
-        response = f"Hi {employee.name}! I can help you cancel a leave application. Could you please provide the application number or tell me which leave you'd like to cancel?"
         
         return {
             "response": response,
@@ -740,6 +1300,7 @@ class LeaveService:
             "response": response,
             "confidence": 0.8
         }
+    
     def handle_leave_cancellation(self, db: Session, intent_result: Dict, employee, message: str) -> Dict:
         """Handle leave cancellation requests"""
         from ..models import LeaveApplication, LeaveStatus
@@ -812,189 +1373,6 @@ class LeaveService:
             "confidence": 0.8,
             "follow_up_needed": True
         }
-    
-    def handle_manager_query(self, db: Session, intent_result: Dict, employee, message: str) -> Dict:
-        """Handle manager queries about team leave"""
-        from ..models import LeaveApplication, LeaveStatus, UserRole
-        
-        if employee.user_role not in [UserRole.MANAGER, UserRole.HR_MANAGER, UserRole.HR_ADMIN]:
-            return {
-                "response": "I can only provide team leave information to managers and HR personnel.",
-                "confidence": 0.9
-            }
-        
-        message_lower = message.lower()
-        
-        # Check if asking for pending approvals
-        if any(word in message_lower for word in ['pending', 'approval', 'approve', 'waiting']):
-            return self.get_pending_approvals_for_manager(db, employee)
-        
-        # Check if asking for team leave overview
-        elif any(word in message_lower for word in ['team', 'overview', 'calendar', 'schedule']):
-            return self.get_team_leave_overview(db, employee)
-        
-        # General manager help
-        else:
-            response = f"Hi {employee.name}! As a {'HR' if 'HR' in employee.user_role.value else 'manager'}, I can help you with:\n\n"
-            response += f"👥 **Team Leave Management:**\n"
-            response += f"   • 'Show pending leave approvals' - Review applications waiting for approval\n"
-            response += f"   • 'Team leave overview' - See upcoming team leave\n"
-            response += f"   • 'Who's on leave this week?' - Check current leave status\n\n"
-            
-            # Show quick stats
-            try:
-                pending_count = self.get_pending_count(db, employee)
-                if pending_count > 0:
-                    response += f"⚠️ **Alert**: You have {pending_count} leave application(s) pending your approval!\n\n"
-                else:
-                    response += f"✅ **Status**: No pending leave approvals at the moment.\n\n"
-            except:
-                pass
-            
-            response += f"What would you like to check?"
-            
-            return {
-                "response": response,
-                "confidence": 0.8,
-                "follow_up_needed": True
-            }
-    
-    def get_pending_approvals_for_manager(self, db: Session, employee) -> Dict:
-        """Get pending leave applications for manager/HR approval"""
-        from ..models import LeaveApplication, LeaveStatus, UserRole
-        
-        try:
-            # Get applications pending approval
-            query = db.query(LeaveApplication).filter(
-                LeaveApplication.status.in_([LeaveStatus.PENDING, LeaveStatus.MANAGER_APPROVED])
-            )
-            
-            # If manager, only show their team's applications
-            if employee.user_role == UserRole.MANAGER:
-                query = query.filter(LeaveApplication.manager_id == employee.id)
-            
-            applications = query.order_by(LeaveApplication.applied_date.asc()).all()
-            
-            if not applications:
-                response = f"✅ **Great news, {employee.name}!**\n\n"
-                response += f"You have no pending leave applications to review at the moment.\n\n"
-                response += f"💡 **Tip**: When employees submit leave requests, they'll appear here for your approval."
-                
-                return {
-                    "response": response,
-                    "confidence": 0.95,
-                    "actions_performed": ["pending_approvals_check"]
-                }
-            
-            # Format pending applications
-            response = f"📋 **Pending Leave Approvals for {employee.name}**\n\n"
-            response += f"You have **{len(applications)}** application(s) waiting for approval:\n\n"
-            
-            for i, app in enumerate(applications, 1):
-                urgency_emoji = "🚨" if app.leave_type.value == "emergency" else "📅"
-                status_text = "Manager Review" if app.status == LeaveStatus.PENDING else "HR Review"
-                
-                response += f"{urgency_emoji} **Application #{i}**\n"
-                response += f"   • **Employee**: {app.employee.name} ({app.employee.department})\n"
-                response += f"   • **Application**: {app.application_number}\n"
-                response += f"   • **Type**: {app.leave_type.value.title()} Leave\n"
-                response += f"   • **Dates**: {app.start_date.strftime('%b %d')} - {app.end_date.strftime('%b %d, %Y')}\n"
-                response += f"   • **Duration**: {float(app.total_days)} day(s)\n"
-                response += f"   • **Reason**: {app.reason or 'Not specified'}\n"
-                response += f"   • **Applied**: {app.applied_date.strftime('%b %d, %Y')}\n"
-                response += f"   • **Status**: {status_text}\n"
-                
-                if app.leave_type.value == "emergency":
-                    response += f"   • ⚠️ **URGENT**: Emergency leave - requires immediate attention\n"
-                
-                response += f"\n"
-            
-            response += f"🔧 **Next Steps:**\n"
-            response += f"   • Visit the HR Management panel to approve/reject applications\n"
-            response += f"   • Or ask me 'How do I approve leave applications?'\n\n"
-            response += f"💡 **Need help?** Ask me about specific applications or approval processes!"
-            
-            return {
-                "response": response,
-                "confidence": 0.95,
-                "actions_performed": ["pending_approvals_retrieved"],
-                "pending_count": len(applications)
-            }
-            
-        except Exception as e:
-            return {
-                "response": f"I encountered an error retrieving pending approvals: {str(e)}. Please try again or check the HR Management panel.",
-                "confidence": 0.3,
-                "error": str(e)
-            }
-    
-    def get_pending_count(self, db: Session, employee) -> int:
-        """Get count of pending applications for quick stats"""
-        from ..models import LeaveApplication, LeaveStatus, UserRole
-        
-        query = db.query(LeaveApplication).filter(
-            LeaveApplication.status.in_([LeaveStatus.PENDING, LeaveStatus.MANAGER_APPROVED])
-        )
-        
-        if employee.user_role == UserRole.MANAGER:
-            query = query.filter(LeaveApplication.manager_id == employee.id)
-        
-        return query.count()
-    
-    def get_team_leave_overview(self, db: Session, employee) -> Dict:
-        """Get team leave overview for managers"""
-        from ..models import LeaveApplication, LeaveStatus
-        from datetime import date, timedelta
-        
-        try:
-            # Get approved leave for next 30 days
-            start_date = date.today()
-            end_date = start_date + timedelta(days=30)
-            
-            query = db.query(LeaveApplication).filter(
-                LeaveApplication.status == LeaveStatus.HR_APPROVED,
-                LeaveApplication.start_date <= end_date,
-                LeaveApplication.end_date >= start_date
-            )
-            
-            # Filter by team if manager
-            if employee.user_role.value == "manager":
-                query = query.filter(LeaveApplication.manager_id == employee.id)
-            
-            upcoming_leave = query.order_by(LeaveApplication.start_date).all()
-            
-            if not upcoming_leave:
-                response = f"📅 **Team Leave Overview**\n\n"
-                response += f"✅ No approved leave scheduled for the next 30 days.\n"
-                response += f"Your team will be fully available! 🎉"
-                
-                return {
-                    "response": response,
-                    "confidence": 0.9
-                }
-            
-            response = f"📅 **Upcoming Team Leave (Next 30 Days)**\n\n"
-            
-            for app in upcoming_leave:
-                response += f"🏖️ **{app.employee.name}**\n"
-                response += f"   • {app.start_date.strftime('%b %d')} - {app.end_date.strftime('%b %d')}\n"
-                response += f"   • {app.leave_type.value.title()} Leave ({float(app.total_days)} days)\n"
-                response += f"   • Reason: {app.reason or 'Personal'}\n\n"
-            
-            response += f"💡 **Planning tip**: Consider workload distribution during these periods."
-            
-            return {
-                "response": response,
-                "confidence": 0.9,
-                "actions_performed": ["team_overview_generated"]
-            }
-            
-        except Exception as e:
-            return {
-                "response": f"Error generating team overview: {str(e)}",
-                "confidence": 0.3,
-                "error": str(e)
-            }
     
     def handle_general_hr_query(self, db: Session, intent_result: Dict, employee, message: str) -> Dict:
         """Handle general HR queries that may be leave-related"""
